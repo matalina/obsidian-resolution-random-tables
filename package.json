@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-resolution-random-tables",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Random tables, oracle and task rolls from tables in your vault, written into the note with inline code like `pick:loot`, `oracle:+` and `task:4`",
 	"main": "main.js",
 	"type": "module",
