@@ -16,6 +16,19 @@ Is the door locked? Yes, but ← _(oracle likely · DC 12 · 1d20: 10)_
 Picking the lock: Success ← _(task 4 · DC 12 · 1d20: 14)_
 ```
 
+Every command works in Reading view and Live Preview. Tables are ordinary markdown tables in ordinary notes, so they read fine without the plugin, and once rolled the note is plain text.
+
+> [!warning] Rolling writes to the note
+> A command rolls the moment its note renders, so a template note full of `pick:` commands gets rolled if you open it. Keep templates where you don't read them, or wrap the commands in a code block.
+
+## Installation
+
+The plugin isn't in the community plugin list yet. To install it by hand:
+
+1. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/matalina/obsidian-resolution-random-tables/releases).
+2. Put them in `<vault>/.obsidian/plugins/resolution-and-random-tables/`.
+3. Turn on **Resolution and Random Tables** in **Settings → Community plugins**.
+
 ## Writing tables
 
 A table is any markdown table with a heading directly above it. The first header cell is the die, and the first column says which rolls give each row:
@@ -138,6 +151,20 @@ If you set **Default oracle table** or **Default task table**, plain `oracle:` a
 
 A table that counts from the DC only works with `oracle:` and `task:`. `pick:` and `{nesting}` refuse it, because there's no DC to count from.
 
+## Settings
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Tables folder** | whole vault | Only notes in this folder (and its subfolders) are read for tables. |
+| **Show the roll** | on | Writes the die, DC and roll after the result in italics. |
+| **Die** | `1d20` | Rolled for `oracle:` and `task:` when the results table's header doesn't name a die. |
+| **Oracle DC** | `15` | The DC for a 50/50 `oracle:`. |
+| **Likelihood shift** | `3` | How far each `+` lowers, or `-` raises, the oracle DC. |
+| **Task base** | `0` | Task DC = base + level × step. |
+| **Task step** | `3` | Task DC = base + level × step. |
+| **Default oracle table** | built-in bands | A table that answers `oracle:` when none is named. |
+| **Default task table** | built-in bands | A table that answers `task:` when none is named. |
+
 ## In the editor
 
 - **Autocomplete.** Typing `pick:`, `oracle:+ ` or `task:4 ` suggests table names.
@@ -145,12 +172,65 @@ A table that counts from the DC only works with `oracle:` and `task:`. `pick:` a
 - **Reload tables** (command palette) re-reads every note, if something looks stale.
 - Turn off **Show the roll** to write only the result, without the italic note.
 
+## Lineage
+
+The random tables, `pick:` and the oracle and task rolls were first built inside the [Tag and Tally](https://github.com/matalina/tag-and-tally-prime) plugin and were moved out into this standalone plugin. Tables from your own notes, results tables that count from the DC, adjustable DCs, and degrees of success are new here.
+
+## License
+
+[MIT](LICENSE) © 2026 Alicia Wilkerson
+
+## Changelog
+
+Each [release](https://github.com/matalina/obsidian-resolution-random-tables/releases) lists its changes. The notes are generated from the pull requests and commits merged since the previous release.
+
 ## Development
+
+Requires Node 20+.
 
 ```bash
 npm install
-npm run dev        # watch build
-npm test           # unit tests for the dice, tables and rolling engine
+cp .env.example .env    # then set DROPBOX_DIR / VAULT_SUBPATH to your vault
+npm run dev             # rebuild on change
+npm test                # dice, table, rolling and write-back tests
+npm run build           # typecheck, then production build
+npm run test:vault      # build, then copy the plugin and example into the vault
 npm run lint
-npm run test:vault # build, then copy into the vault named in .env
+```
+
+`npm run test:vault` copies the build to `<DROPBOX_DIR>/<VAULT_SUBPATH>/.obsidian/plugins/resolution-and-random-tables/` and the example to `Resolution and Random Tables Example.md`. Reload the plugin in Obsidian to pick it up.
+
+Source layout:
+
+```
+src/
+  main.ts            loads tables, registers the Reading view processor, Live Preview extension and autocomplete
+  dice.ts            the dice-expression roller
+  tables.ts          parses headed markdown tables: ranges, DC terms, phrases, labels, columns
+  engine.ts          finds tables by name, rolls them, and runs pick:, oracle: and task:
+  store.ts           keeps the tables in step with the vault
+  live.ts            Live Preview: rolls each command once the cursor is off it
+  reading.ts         Reading view: rolls each command as it renders
+  write.ts           writes results back over their code in the file
+  suggest.ts         table-name autocomplete
+  settings.ts        settings tab
+  fixtures/          a degrees-of-success table for the tests
+scripts/
+  copy-to-vault.mjs  npm run test:vault
+```
+
+### Releasing
+
+```bash
+npm version patch          # bumps manifest.json + versions.json and tags (no "v" prefix)
+git push --follow-tags
+```
+
+Pushing the tag builds the plugin and creates a draft GitHub release. The draft has the plugin files attached and generated release notes. Review the notes, then publish the release from the Releases page.
+
+The first release is already at `0.1.0` in `manifest.json` and `versions.json`, so tag it as is instead of bumping:
+
+```bash
+git tag 0.1.0
+git push origin 0.1.0
 ```
