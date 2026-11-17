@@ -1,8 +1,8 @@
-/* A command that can't roll: the code stays, underlined in red, with the reason on hover. */
+/* A command that can't roll: the code stays, underlined in red, with the reason on hover.
+   A dotted border rather than text-decoration, which older mobile webviews only partly support. */
 .rrt-error,
 .cm-s-obsidian .rrt-error {
-	text-decoration: underline wavy var(--text-error);
-	text-underline-offset: 3px;
+	border-bottom: 2px dotted var(--text-error);
 	cursor: help;
 }
 

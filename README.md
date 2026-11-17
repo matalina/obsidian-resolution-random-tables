@@ -62,6 +62,9 @@ A table is any markdown table with a heading directly above it. The first header
 
 Tables are read from the whole vault by default, or only from one folder if you set **Tables folder**. Edits take effect as soon as Obsidian re-indexes the note, with no reload needed.
 
+> [!note] What the plugin reads
+> To find tables, the plugin lists the notes in your vault and reads the ones Obsidian has indexed with a heading and a table. With **Tables folder** set, it lists and reads only that folder. Nothing leaves your vault: the plugin makes no network requests.
+
 ## Oracle
 
 `oracle:` asks a yes/no question. It rolls the die (default `1d20`) against the oracle DC (default 15):

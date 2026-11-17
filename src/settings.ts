@@ -1,4 +1,4 @@
-import { App, debounce, PluginSettingTab, Setting } from 'obsidian';
+import { App, debounce, PluginSettingTab, SettingDefinitionItem } from 'obsidian';
 import { DEFAULT_RESOLUTION, ResolutionSettings } from './engine';
 import { isDiceFormula } from './dice';
 import type ResolutionTablesPlugin from './main';
@@ -13,115 +13,121 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	tablesFolder: '',
 };
 
+type Key = keyof PluginSettings;
+
+const TEXT_KEYS: Key[] = ['tablesFolder', 'die', 'oracleTable', 'taskTable'];
+const NUMBER_KEYS: Key[] = ['oracleDc', 'shift', 'taskBase', 'taskStep'];
+
 export class SettingsTab extends PluginSettingTab {
+	private countEl: HTMLElement | null = null;
+	private readonly reload: () => void;
+
 	constructor(
 		app: App,
 		private readonly plugin: ResolutionTablesPlugin,
 	) {
 		super(app, plugin);
+		this.reload = debounce(() => void this.plugin.reloadTables().then(() => this.updateCount()), 600, true);
 	}
 
-	display(): void {
-		const { containerEl } = this;
-		const s = this.plugin.settings;
-		containerEl.empty();
-
-		const reload = debounce(() => void this.plugin.reloadTables().then(() => this.updateCount()), 600, true);
-
-		new Setting(containerEl)
-			.setName('Tables folder')
-			.setDesc('Only notes in this folder (and its subfolders) are searched for tables. Leave blank to use the whole vault.')
-			.addText((t) =>
-				t
-					.setPlaceholder('Whole vault')
-					.setValue(s.tablesFolder)
-					.onChange(async (v) => {
-						s.tablesFolder = v.trim();
-						await this.plugin.saveSettings();
-						reload();
-					}),
-			);
-		this.countEl = containerEl.createDiv({ cls: 'setting-item-description rrt-count' });
-		this.updateCount();
-
-		new Setting(containerEl)
-			.setName('Show the roll')
-			.setDesc('Write the roll after the result, in italics.')
-			.addToggle((t) =>
-				t.setValue(s.showRolls).onChange(async (v) => {
-					s.showRolls = v;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl).setName('Oracle and task').setHeading();
-		containerEl.createEl('p', {
-			cls: 'setting-item-description',
-			text: 'A results table can override any of these with lines like "dc: 12" or "step: 2" between its heading and the table.',
-		});
-
-		new Setting(containerEl)
-			.setName('Die')
-			.setDesc('Rolled for the oracle and tasks when the results table does not name a die in its header.')
-			.addText((t) =>
-				t.setValue(s.die).onChange(async (v) => {
-					if (!isDiceFormula(v)) return;
-					s.die = v.trim();
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		this.number(containerEl, 'Oracle DC', 'DC for a 50/50 question: oracle:', s.oracleDc, (v) => (s.oracleDc = v));
-		this.number(
-			containerEl,
-			'Likelihood shift',
-			'How much each + lowers, and each - raises, the oracle DC: oracle:+ and oracle:--',
-			s.shift,
-			(v) => (s.shift = v),
-		);
-		this.number(containerEl, 'Task base', 'Task DC = base + level × step', s.taskBase, (v) => (s.taskBase = v));
-		this.number(containerEl, 'Task step', 'Task DC = base + level × step', s.taskStep, (v) => (s.taskStep = v));
-
-		new Setting(containerEl)
-			.setName('Default oracle table')
-			.setDesc('A table from your vault to answer oracle: when none is named. Leave blank for the built-in yes and no bands.')
-			.addText((t) =>
-				t.setValue(s.oracleTable).onChange(async (v) => {
-					s.oracleTable = v.trim();
-					await this.plugin.saveSettings();
-				}),
-			);
-		new Setting(containerEl)
-			.setName('Default task table')
-			.setDesc('A table from your vault to answer task: when none is named. Leave blank for the built-in success and fail bands.')
-			.addText((t) =>
-				t.setValue(s.taskTable).onChange(async (v) => {
-					s.taskTable = v.trim();
-					await this.plugin.saveSettings();
-				}),
-			);
+	// Rendered by Obsidian from these definitions, which also feed its settings search.
+	getSettingDefinitions(): SettingDefinitionItem<Key>[] {
+		return [
+			{
+				name: 'Tables folder',
+				desc: 'Only notes in this folder (and its subfolders) are searched for tables. Leave blank to use the whole vault.',
+				control: { type: 'folder', key: 'tablesFolder', placeholder: 'Whole vault' },
+			},
+			{
+				name: 'Tables found',
+				searchable: false,
+				render: (setting) => {
+					this.countEl = setting.descEl;
+					this.updateCount();
+					return () => (this.countEl = null);
+				},
+			},
+			{
+				name: 'Show the roll',
+				desc: 'Write the roll after the result, in italics.',
+				control: { type: 'toggle', key: 'showRolls' },
+			},
+			{
+				type: 'group',
+				heading: 'Oracle and task',
+				items: [
+					{
+						name: 'Die',
+						desc: 'Rolled for the oracle and tasks when the results table does not name a die in its header.',
+						aliases: ['dice'],
+						control: {
+							type: 'text',
+							key: 'die',
+							placeholder: DEFAULT_SETTINGS.die,
+							validate: (v) => (isDiceFormula(v) ? undefined : 'Not a dice formula, e.g. 1d20 or 2d6+1'),
+						},
+					},
+					{
+						name: 'Oracle DC',
+						desc: 'DC for a 50/50 question: oracle:',
+						control: { type: 'number', key: 'oracleDc', step: 1 },
+					},
+					{
+						name: 'Likelihood shift',
+						desc: 'How much each + lowers, and each - raises, the oracle DC: oracle:+ and oracle:--',
+						control: { type: 'number', key: 'shift', step: 1 },
+					},
+					{
+						name: 'Task base',
+						desc: 'Task DC = base + level × step',
+						control: { type: 'number', key: 'taskBase', step: 1 },
+					},
+					{
+						name: 'Task step',
+						desc: 'Task DC = base + level × step',
+						control: { type: 'number', key: 'taskStep', step: 1 },
+					},
+					{
+						name: 'Default oracle table',
+						desc: 'A table from your vault to answer oracle: when none is named. Leave blank for the built-in yes and no bands.',
+						control: { type: 'text', key: 'oracleTable' },
+					},
+					{
+						name: 'Default task table',
+						desc: 'A table from your vault to answer task: when none is named. Leave blank for the built-in success and fail bands.',
+						control: { type: 'text', key: 'taskTable' },
+					},
+				],
+			},
+		];
 	}
 
-	private countEl: HTMLElement;
+	getControlValue(key: string): unknown {
+		return this.plugin.settings[key as Key];
+	}
+
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		const s = this.plugin.settings as unknown as Record<string, unknown>;
+		if (TEXT_KEYS.includes(key as Key)) {
+			const text = typeof value === 'string' ? value.trim() : '';
+			if (key === 'die' && !isDiceFormula(text)) return;
+			s[key] = text;
+		} else if (NUMBER_KEYS.includes(key as Key)) {
+			const n = typeof value === 'number' ? value : parseInt(String(value), 10);
+			if (!Number.isFinite(n)) return;
+			s[key] = Math.trunc(n);
+		} else if (key === 'showRolls') {
+			s[key] = value === true;
+		} else {
+			return;
+		}
+		await this.plugin.saveSettings();
+		if (key === 'tablesFolder') this.reload();
+	}
 
 	private updateCount() {
 		const tables = this.plugin.registry.all();
 		const notes = new Set(tables.map((t) => t.path)).size;
-		this.countEl?.setText(`Found ${tables.length} table${tables.length === 1 ? '' : 's'} in ${notes} note${notes === 1 ? '' : 's'}.`);
-	}
-
-	private number(el: HTMLElement, name: string, desc: string, value: number, set: (v: number) => void) {
-		new Setting(el)
-			.setName(name)
-			.setDesc(desc)
-			.addText((t) => {
-				t.inputEl.type = 'number';
-				t.setValue(String(value)).onChange(async (v) => {
-					const n = parseInt(v, 10);
-					if (Number.isNaN(n)) return;
-					set(n);
-					await this.plugin.saveSettings();
-				});
-			});
+		this.countEl?.setText(`${tables.length} table${tables.length === 1 ? '' : 's'} in ${notes} note${notes === 1 ? '' : 's'}.`);
 	}
 }

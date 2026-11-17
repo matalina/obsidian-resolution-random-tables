@@ -1,7 +1,7 @@
 // Keeps the table registry in step with the vault: loads every note that has a table once the
 // layout is ready, then re-parses a note whenever Obsidian re-indexes it.
 
-import { App, CachedMetadata, TAbstractFile, TFile } from 'obsidian';
+import { App, CachedMetadata, TAbstractFile, TFile, Vault } from 'obsidian';
 import { TableRegistry } from './engine';
 import { parseTables } from './tables';
 
@@ -23,9 +23,22 @@ export class VaultTables {
 		return !!cache.headings?.length && !!cache.sections?.some((s) => s.type === 'table');
 	}
 
+	/** With a tables folder set, only that folder is walked; otherwise every note in the vault. */
+	private filesInScope(): TFile[] {
+		const folder = this.folder().trim().replace(/^\/+|\/+$/g, '');
+		if (!folder) return this.app.vault.getMarkdownFiles();
+		const root = this.app.vault.getFolderByPath(folder);
+		if (!root) return [];
+		const files: TFile[] = [];
+		Vault.recurseChildren(root, (f) => {
+			if (f instanceof TFile && f.extension === 'md') files.push(f);
+		});
+		return files;
+	}
+
 	async loadAll(): Promise<void> {
 		this.registry.clear();
-		const files = this.app.vault.getMarkdownFiles().filter((f) => this.inScope(f.path));
+		const files = this.filesInScope();
 		await Promise.all(files.map((f) => this.loadFile(f)));
 	}
 
