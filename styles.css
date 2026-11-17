@@ -1,0 +1,12 @@
+/* A command that can't roll: the code stays, underlined in red, with the reason on hover. */
+.rrt-error,
+.cm-s-obsidian .rrt-error {
+	text-decoration: underline wavy var(--text-error);
+	text-underline-offset: 3px;
+	cursor: help;
+}
+
+.rrt-suggestion-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}

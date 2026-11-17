@@ -1,0 +1,10 @@
+{
+	"id": "resolution-and-random-tables",
+	"name": "Resolution and Random Tables",
+	"version": "0.1.0",
+	"minAppVersion": "1.13.0",
+	"description": "Roll on random tables kept in your notes, ask the oracle and roll tasks against a level, writing each result into the note from inline code like `pick:loot`, `oracle:+` and `task:4`.",
+	"author": "Alicia Wilkerson",
+	"authorUrl": "https://github.com/matalina",
+	"isDesktopOnly": false
+}
