@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'fs';
 import { isDiceFormula, rollDice } from './dice';
-import { parseRange, parseTables, slugify } from './tables';
+import { parseRange, parseTables, rowText, slugify } from './tables';
 import { DEFAULT_RESOLUTION, parseCommand, runCommand, TableRegistry } from './engine';
 
 /** An rng that makes every die land on `face` for a die of `sides`. */
@@ -98,7 +99,7 @@ describe('parsing notes', () => {
 		expect(tables.map((t) => t.name)).toEqual(['loot', 'coin', 'gem', 'door']);
 		const [loot, , gem, door] = tables;
 		expect(loot.formula).toBe('d6');
-		expect(loot.rows[1].value).toBe('A rusty sword — 2 gp');
+		expect(rowText(loot.rows[1])).toBe('A rusty sword — 2 gp');
 		expect(gem.uniform).toBe(true);
 		expect(door.usesDc).toBe(true);
 		expect(door.overrides).toEqual({ dc: 12, shift: 2 });
@@ -112,7 +113,9 @@ describe('commands', () => {
 		expect(parseCommand('pick: loot')).toEqual({ kind: 'pick', ref: 'loot' });
 		expect(parseCommand('oracle:')).toEqual({ kind: 'oracle', likelihood: 0, ref: '' });
 		expect(parseCommand('oracle:-- door')).toEqual({ kind: 'oracle', likelihood: -2, ref: 'door' });
-		expect(parseCommand('task:4 door')).toEqual({ kind: 'task', level: 4, ref: 'door' });
+		expect(parseCommand('task:4 door')).toEqual({ kind: 'task', level: 4, mod: 0, ref: 'door' });
+		expect(parseCommand('task:15 +3 degrees.attack')).toEqual({ kind: 'task', level: 15, mod: 3, ref: 'degrees.attack' });
+		expect(parseCommand('task:15 -2')).toEqual({ kind: 'task', level: 15, mod: -2, ref: '' });
 		expect(parseCommand('task:')).toMatchObject({ kind: 'invalid' });
 		expect(parseCommand('oracle:+-')).toMatchObject({ kind: 'invalid' });
 		expect(parseCommand('dice:2d6')).toBeNull();
@@ -197,5 +200,73 @@ describe('the example note', () => {
 				expect(out, code).toMatchObject({ ok: true });
 			}
 		}
+	});
+});
+
+describe('Dungeon Crawler Carl degrees of success', () => {
+	const path = 'Degrees of Success.md';
+	const text = readFileSync('src/fixtures/Degrees of Success.md', 'utf8');
+	const reg = new TableRegistry();
+	reg.setFile(path, parseTables(text, path));
+	// Target number = the level: base 0, step 1
+	const settings = { ...DEFAULT_RESOLUTION, taskBase: 0, taskStep: 1, showRolls: false };
+	const roll = (code: string, natural: number) =>
+		runCommand(parseCommand(code)!, { registry: reg, settings, rng: face(natural, 20) });
+
+	it('reads the phrase rows', () => {
+		const [table] = reg.all();
+		expect(table.usesDc).toBe(true);
+		expect(table.columns).toEqual(['attack', 'evade', 'non-combat']);
+		expect(table.rows.map((r) => r.label)).toEqual([
+			'Critical Hit',
+			'Amazing Success',
+			'Standard Success',
+			'Near Miss',
+			'Standard Fail',
+			'Major Fail',
+			'Critical Fail',
+		]);
+	});
+
+	it('is found by note name, with or without a column', () => {
+		expect(roll('task:15 Degrees of Success', 15)).toEqual({ ok: true, text: 'Standard Success' });
+		expect(roll('task:15 Degrees of Success.attack', 14)).toEqual({
+			ok: true,
+			text: 'Near Miss — GM calls a near miss, inviting other players to use an Intervene Action',
+		});
+		// Evade has a dash for Near Miss: just the label
+		expect(roll('task:15 Degrees of Success.evade', 13)).toEqual({ ok: true, text: 'Near Miss' });
+	});
+
+	it('matches every band, the modifier and naturals', () => {
+		const band = (code: string, n: number) => {
+			const out = roll(code, n);
+			return out.ok ? out.text : out.error;
+		};
+		expect(band('task:10 Degrees of Success', 20)).toBe('Critical Hit');
+		expect(band('task:5 Degrees of Success', 15)).toBe('Amazing Success');
+		expect(band('task:15 Degrees of Success', 12)).toBe('Standard Fail');
+		expect(band('task:15 Degrees of Success', 5)).toBe('Major Fail');
+		expect(band('task:15 Degrees of Success', 1)).toBe('Critical Fail');
+		// A modifier moves the total but not the natural: 19+3 = 22 vs 12 → Amazing, nat 1 stays Critical Fail
+		expect(band('task:12 +3 Degrees of Success', 19)).toBe('Amazing Success');
+		expect(band('task:5 +10 Degrees of Success', 1)).toBe('Critical Fail');
+		expect(band('task:15 -2 Degrees of Success', 16)).toBe('Near Miss');
+	});
+
+	it('shows the modifier in the roll note', () => {
+		const out = runCommand(parseCommand('task:12 +3 Degrees of Success')!, {
+			registry: reg,
+			settings: { ...settings, showRolls: true },
+			rng: face(11, 20),
+		});
+		expect(out).toEqual({ ok: true, text: 'Standard Success ← _(task 12 · DC 12 · 1d20+3: 11+3 = 14)_' });
+	});
+
+	it('names the columns when one is wrong', () => {
+		expect(roll('task:15 Degrees of Success.defence', 10)).toEqual({
+			ok: false,
+			error: '"degrees-of-success-failure-reworded" has no column "defence" (columns: attack, evade, non-combat)',
+		});
 	});
 });

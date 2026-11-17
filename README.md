@@ -30,10 +30,11 @@ A table is any markdown table with a heading directly above it. The first header
 | 6   | {gem} worth {2d6*10} gp |       |
 ```
 
-- **Name.** The heading, lower-cased with dashes: `## Wandering Mob` is `pick:wandering-mob`. If two notes use the same heading, name the note too: `pick:Floor 3#wandering-mob`.
+- **Name.** The heading, lower-cased with dashes: `## Wandering Mob` is `pick:wandering-mob`. If two notes use the same heading, name the note too: `pick:Floor 3#wandering-mob`. A note with only one table can be named by the note alone: `pick:Floor 3`.
 - **Die.** Any dice expression: `d20`, `2d6`, `d%`, `1d4+1`. If the header isn't dice, the die is `1d` the highest number in the first column.
-- **Rows.** A number (`6`), a range (`1-3`, `1–3`, `2 to 4`), or open-ended (`19+`). `00` counts as 100.
-- **Extra columns** are kept, joined with a dash: `A rusty sword — 2 gp`.
+- **Rows.** A number (`6`), a range (`1-3`, `1–3`, `2 to 4`), or open-ended (`19+`, `≤3`, `3 or less`). `00` counts as 100. `nat 20` or `Natural 1` matches the die as rolled, before any modifier, and wins over every other row.
+- **Extra columns** are kept, joined with a dash: `A rusty sword — 2 gp`. Add `.column` to take just one, by its header: `pick:loot.value`.
+- **Labels.** A `(Name)` at the end of the first cell names the row: `| 1-2 (Near Miss) | … |`. A labelled row rolls to its label, or to the label and the column when you pick one: `Near Miss — You miss`. A cell that's only a dash counts as empty.
 - **Nesting.** `{gem}` rolls another table, and `{2d6*10}` rolls dice. A nested table can be named by note too: `{Treasure#gem}`.
 - **Plain lists.** If the first column isn't numbers, every row is equally likely:
 
@@ -62,7 +63,34 @@ Tables are read from the whole vault by default, or only from one folder if you 
 
 ## Task
 
-`task:4` rolls against a level you give when you write it. The DC is **base + level × step** (default 0 + level × 3, so `task:4` is DC 12).
+`task:4` rolls against a level you give when you write it. The DC is **base + level × step** (default 0 + level × 3, so `task:4` is DC 12). Set base 0 and step 1 to give the target number directly: `task:15` is DC 15.
+
+A modifier after the level is added to the roll: `task:15 +3`, `task:15 -2`. It counts toward the DC, but `nat 20` and `nat 1` rows still look at the die alone.
+
+## Degrees of success (Dungeon Crawler Carl)
+
+Rows can also be written in words, counting from the target: `Beat target by 10+`, `Beat target by 0–9`, `Miss by 1–2`, `Miss by 3–9`, `Miss by 10+`. With a `(Label)` and `Natural 20` / `Natural 1` rows, a degrees-of-success table works as written:
+
+```markdown
+# Degrees of Success
+
+| Result                                    | Attack   | Evade      | Non-Combat |
+| ----------------------------------------- | -------- | ---------- | ---------- |
+| **Natural 20 (Critical Hit)**             | …        | …          | …          |
+| **Beat target by 10+ (Amazing Success)**  | …        | …          | …          |
+| **Beat target by 0–9 (Standard Success)** | …        | …          | …          |
+| **Miss by 1–2 (Near Miss)**               | …        | —          | …          |
+| **Miss by 3–9 (Standard Fail)**           | You miss | You're hit | …          |
+| **Miss by 10+ (Major Fail)**              | …        | …          | …          |
+| **Natural 1 (Critical Fail)**             | …        | …          | …          |
+```
+
+With task base 0 and step 1:
+
+- `task:15 +3 Degrees of Success` → `Standard Success ← _(task 15 · DC 15 · 1d20+3: 13+3 = 16)_`
+- `task:15 +3 Degrees of Success.attack` → `Standard Fail — You miss ← _(…)_`
+
+Set **Default task table** to `Degrees of Success`, and a plain `task:15 +3` uses it.
 
 ## Results
 

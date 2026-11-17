@@ -7,7 +7,7 @@ import { RandomTable } from './tables';
 const TRIGGERS: { kind: 'pick' | 'resolution'; re: RegExp }[] = [
 	{ kind: 'pick', re: /`pick\s*:\s*([^`]*)$/i },
 	{ kind: 'resolution', re: /`oracle\s*:\s*[+-]*\s*([^\s`+-][^`]*)$/i },
-	{ kind: 'resolution', re: /`task\s*:\s*\d+\s+([^`]*)$/i },
+	{ kind: 'resolution', re: /`task\s*:\s*\d+(?:\s*[+-]\s*\d+)?\s+([^`+\-\d][^`]*|)$/i },
 ];
 
 export class TableSuggest extends EditorSuggest<RandomTable> {

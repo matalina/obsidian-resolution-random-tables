@@ -2,7 +2,7 @@
 // `pick:`, `oracle:` and `task:` commands. No Obsidian imports, so it can be unit-tested.
 
 import { DiceError, rollDice, isDiceFormula, Rng } from './dice';
-import { parseRange, RandomTable, slugify, TableRow, termValue } from './tables';
+import { parseRange, RandomTable, rowText, slugify, TableRow, Term, termValue } from './tables';
 
 export interface ResolutionSettings {
 	/** Die rolled for oracle and task when the results table doesn't name one. */
@@ -38,7 +38,7 @@ export type Outcome = { ok: true; text: string } | { ok: false; error: string };
 export type Command =
 	| { kind: 'pick'; ref: string }
 	| { kind: 'oracle'; likelihood: number; ref: string }
-	| { kind: 'task'; level: number; ref: string }
+	| { kind: 'task'; level: number; mod: number; ref: string }
 	| { kind: 'invalid'; error: string };
 
 const MAX_DEPTH = 12;
@@ -48,6 +48,12 @@ const MAX_DEPTH = 12;
 function basename(path: string): string {
 	const file = path.split('/').pop() ?? path;
 	return file.replace(/\.md$/i, '');
+}
+
+export interface Found {
+	table: RandomTable;
+	/** Index into the table's value columns, when the ref picked one. */
+	column?: number;
 }
 
 export class TableRegistry {
@@ -70,21 +76,51 @@ export class TableRegistry {
 		return [...this.byPath.values()].flat();
 	}
 
-	/** `loot`, `Loot`, or `Treasure#Loot` when the name is in more than one note. */
-	find(ref: string): { table: RandomTable } | { error: string } {
+	/**
+	 * `loot`, `Treasure#loot` when the name is in more than one note, `Treasure` for a note with one
+	 * table, and any of those with `.column` to take one column: `degrees.attack`.
+	 */
+	find(ref: string): Found | { error: string } {
+		const whole = this.findTable(ref);
+		if ('table' in whole) return whole;
+		const dot = ref.lastIndexOf('.');
+		if (dot > 0) {
+			const base = this.findTable(ref.slice(0, dot));
+			if ('table' in base) {
+				const want = slugify(ref.slice(dot + 1));
+				const column = base.table.columns.indexOf(want);
+				if (column < 0) {
+					const cols = base.table.columns.filter(Boolean).join(', ');
+					return { error: `"${base.table.name}" has no column "${want}" (columns: ${cols})` };
+				}
+				return { table: base.table, column };
+			}
+		}
+		return whole;
+	}
+
+	private findTable(ref: string): { table: RandomTable } | { error: string } {
 		const hash = ref.lastIndexOf('#');
 		const note = hash >= 0 ? ref.slice(0, hash).trim() : '';
 		const name = slugify(hash >= 0 ? ref.slice(hash + 1) : ref);
 		if (!name) return { error: 'No table named' };
 
+		const inNote = (t: RandomTable, want: string) =>
+			basename(t.path).toLowerCase() === want || t.path.replace(/\.md$/i, '').toLowerCase() === want;
+
 		let found = this.all().filter((t) => t.name === name);
 		if (note) {
 			const want = note.replace(/\.md$/i, '').toLowerCase();
-			found = found.filter(
-				(t) =>
-					basename(t.path).toLowerCase() === want ||
-					t.path.replace(/\.md$/i, '').toLowerCase() === want,
-			);
+			found = found.filter((t) => inNote(t, want));
+		}
+		if (found.length === 0 && !note) {
+			// A note name on its own finds the note's only table.
+			const want = ref.trim().replace(/\.md$/i, '').toLowerCase();
+			const tables = this.all().filter((t) => inNote(t, want));
+			if (tables.length === 1) return { table: tables[0] };
+			if (tables.length > 1) {
+				return { error: `"${ref.trim()}" has ${tables.length} tables — write ${basename(tables[0].path)}#${tables[0].name}` };
+			}
 		}
 		if (found.length === 0) return { error: `No table "${ref.trim()}"` };
 
@@ -114,18 +150,38 @@ interface RollContext {
 export interface TableRoll {
 	value: string;
 	formula: string;
+	/** The dice as rolled, before the modifier. */
+	natural: number;
+	/** natural + modifier: what the rows are matched against. */
 	total: number;
+}
+
+interface RollOptions {
+	dc?: number;
+	/** Die to use when the table's header doesn't name one. */
+	die?: string;
+	column?: number;
+	/** Added to the roll after the natural rows are checked. */
+	mod?: number;
 }
 
 class RollError extends Error {}
 
-function rowFor(table: RandomTable, total: number, dc: number | undefined): TableRow | null {
+/** A range end, with null (open-ended) standing for `open`. */
+function bound(term: Term | null, dc: number | undefined, open: number): number | null {
+	return term === null ? open : termValue(term, dc);
+}
+
+function rowFor(table: RandomTable, natural: number, total: number, dc: number | undefined): TableRow | null {
+	const natRow = table.rows.find((r) => r.range?.natural === natural);
+	if (natRow) return natRow;
+
 	let lowest: { row: TableRow; min: number } | null = null;
 	let highest: { row: TableRow; min: number } | null = null;
 	for (const row of table.rows) {
-		if (!row.range) continue;
-		const min = termValue(row.range.min, dc);
-		const max = row.range.max ? termValue(row.range.max, dc) : Infinity;
+		if (!row.range || row.range.natural !== undefined) continue;
+		const min = bound(row.range.min, dc, -Infinity);
+		const max = bound(row.range.max, dc, Infinity);
 		if (min === null || max === null) throw new RollError(`"${table.name}" counts from the DC — use it with oracle: or task:`);
 		if (total >= min && total <= max) return row;
 		if (!lowest || min < lowest.min) lowest = { row, min };
@@ -136,22 +192,28 @@ function rowFor(table: RandomTable, total: number, dc: number | undefined): Tabl
 	return null;
 }
 
-function rollTable(table: RandomTable, ctx: RollContext, dc?: number, die?: string): TableRoll {
+function rollTable(table: RandomTable, ctx: RollContext, opts: RollOptions = {}): TableRoll {
+	const { dc, column } = opts;
+	const mod = opts.mod ?? 0;
 	if (table.uniform) {
 		const formula = `1d${table.rows.length}`;
 		const { total } = rollDice(formula, ctx.rng);
-		return { value: expand(table.rows[total - 1].value, ctx), formula, total };
+		return { value: expand(rowText(table.rows[total - 1], column), ctx), formula, natural: total, total };
 	}
 
-	let formula = table.formula ?? die;
+	let formula = table.formula ?? opts.die;
 	if (!formula) {
-		const top = Math.max(...table.rows.map((r) => (r.range?.max ? termValue(r.range.max, dc) ?? 0 : termValue(r.range!.min, dc) ?? 0)));
-		formula = `1d${top}`;
+		const tops = table.rows.map((r) => {
+			const edge = r.range?.max ?? r.range?.min ?? null;
+			return edge ? termValue(edge, dc) ?? 0 : 0;
+		});
+		formula = `1d${Math.max(...tops)}`;
 	}
-	const { total } = rollDice(formula, ctx.rng);
-	const row = rowFor(table, total, dc);
+	const natural = rollDice(formula, ctx.rng).total;
+	const total = natural + mod;
+	const row = rowFor(table, natural, total, dc);
 	if (!row) throw new RollError(`"${table.name}" has no row for ${total}`);
-	return { value: expand(row.value, ctx), formula, total };
+	return { value: expand(rowText(row, column), ctx), formula, natural, total };
 }
 
 /** Fill `{table}`, `{Note#table}` and `{2d6*10}` in a result. */
@@ -162,7 +224,7 @@ export function expand(text: string, ctx: RollContext): string {
 		if ('table' in found) {
 			if (ctx.depth >= MAX_DEPTH) throw new RollError(`Tables nest more than ${MAX_DEPTH} deep at {${ref}}`);
 			if (found.table.usesDc) throw new RollError(`{${ref}} counts from the DC and can't be nested`);
-			return rollTable(found.table, { ...ctx, depth: ctx.depth + 1 }).value;
+			return rollTable(found.table, { ...ctx, depth: ctx.depth + 1 }, { column: found.column }).value;
 		}
 		if (isDiceFormula(ref) || /^\s*-?\d+\s*$/.test(ref)) return String(rollDice(ref, ctx.rng).total);
 		throw new RollError(found.error.replace('No table', 'No table or dice') + ` in {${ref}}`);
@@ -179,7 +241,8 @@ function bands(labels: [string, string, string, string, string]): RandomTable {
 		path: '',
 		line: 0,
 		formula: null,
-		rows: ranges.map((r, i) => ({ range: parseRange(r), value: labels[i] })),
+		rows: ranges.map((r, i) => ({ range: parseRange(r), label: null, cells: [labels[i]] })),
+		columns: [''],
 		uniform: false,
 		usesDc: true,
 		overrides: {},
@@ -212,9 +275,10 @@ export function parseCommand(code: string): Command | null {
 		const likelihood = signs.startsWith('-') ? -signs.length : signs.length;
 		return { kind: 'oracle', likelihood, ref: o[2].trim() };
 	}
-	const t = /^(\d+)\s*(.*)$/.exec(arg);
+	const t = /^(\d+)\s*(?:([+-])\s*(\d+)(?=\s|$))?\s*(.*)$/.exec(arg);
 	if (!t) return { kind: 'invalid', error: 'task: needs a level, e.g. task:4' };
-	return { kind: 'task', level: parseInt(t[1], 10), ref: t[2].trim() };
+	const mod = t[2] ? (t[2] === '-' ? -1 : 1) * parseInt(t[3], 10) : 0;
+	return { kind: 'task', level: parseInt(t[1], 10), mod, ref: t[4].trim() };
 }
 
 const LIKELIHOOD: Record<number, string> = {
@@ -235,12 +299,19 @@ function annotate(value: string, note: string, settings: ResolutionSettings): st
 	return settings.showRolls ? `${value} ← _(${note})_` : value;
 }
 
-function resultsTable(ref: string, fallback: string, builtin: RandomTable, registry: TableRegistry): RandomTable {
+function resultsTable(ref: string, fallback: string, builtin: RandomTable, registry: TableRegistry): Found {
 	const name = ref || fallback;
-	if (!name) return builtin;
+	if (!name) return { table: builtin };
 	const found = registry.find(name);
 	if ('error' in found) throw new RollError(found.error);
-	return found.table;
+	return found;
+}
+
+const signed = (n: number) => (n < 0 ? `${n}` : `+${n}`);
+
+/** `1d20: 14`, or `1d20+3: 11+3 = 14` with a modifier. */
+function rollNote(r: TableRoll, mod: number): string {
+	return mod ? `${r.formula}${signed(mod)}: ${r.natural}${signed(mod)} = ${r.total}` : `${r.formula}: ${r.total}`;
 }
 
 /** What's wrong with a command before it's rolled (unknown table, wrong kind of table), or null. */
@@ -269,15 +340,15 @@ export function runCommand(command: Command, env: RunEnv): Outcome {
 				if (found.table.usesDc) {
 					return { ok: false, error: `"${found.table.name}" counts from the DC — use it with oracle: or task:` };
 				}
-				const r = rollTable(found.table, ctx);
+				const r = rollTable(found.table, ctx, { column: found.column });
 				return { ok: true, text: annotate(r.value, `${r.formula}: ${r.total}`, settings) };
 			}
 
 			case 'oracle': {
-				const table = resultsTable(command.ref, settings.oracleTable, ORACLE_BANDS, registry);
+				const { table, column } = resultsTable(command.ref, settings.oracleTable, ORACLE_BANDS, registry);
 				const o = table.overrides;
 				const dc = (o.dc ?? settings.oracleDc) - command.likelihood * (o.shift ?? settings.shift);
-				const r = rollTable(table, ctx, dc, settings.die);
+				const r = rollTable(table, ctx, { dc, die: settings.die, column });
 				const label = LIKELIHOOD[command.likelihood];
 				return {
 					ok: true,
@@ -286,13 +357,13 @@ export function runCommand(command: Command, env: RunEnv): Outcome {
 			}
 
 			case 'task': {
-				const table = resultsTable(command.ref, settings.taskTable, TASK_BANDS, registry);
+				const { table, column } = resultsTable(command.ref, settings.taskTable, TASK_BANDS, registry);
 				const o = table.overrides;
 				const dc = (o.base ?? settings.taskBase) + command.level * (o.step ?? settings.taskStep);
-				const r = rollTable(table, ctx, dc, settings.die);
+				const r = rollTable(table, ctx, { dc, die: settings.die, column, mod: command.mod });
 				return {
 					ok: true,
-					text: annotate(r.value, `task ${command.level} · DC ${dc} · ${r.formula}: ${r.total}`, settings),
+					text: annotate(r.value, `task ${command.level} · DC ${dc} · ${rollNote(r, command.mod)}`, settings),
 				};
 			}
 		}

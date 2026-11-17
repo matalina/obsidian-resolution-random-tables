@@ -14,6 +14,10 @@
 // resolution table for `oracle:` and `task:`. Optional `key: value` lines between the heading and the
 // table override the DC settings for that table:  `dc: 12`, `shift: 2`, `base: 0`, `step: 3`.
 //
+// Rows can also match the natural die (`nat 20`, `Natural 1`), be open-ended downwards (`≤DC-10`,
+// `5 or less`), or say it in words: `Beat target by 10+`, `Beat target by 0–9`, `Miss by 1–2`,
+// `Miss by 10+`. A trailing `(Name)` in that cell is the row's label: `**Miss by 1–2 (Near Miss)**`.
+//
 // A table whose first column isn't numbers is a plain list: every row is equally likely.
 
 import { isDiceFormula } from './dice';
@@ -25,9 +29,12 @@ export interface Term {
 }
 
 export interface RangeSpec {
-	min: Term;
+	/** null = open-ended downwards (`≤DC-10`, `Miss by 10+`). */
+	min: Term | null;
 	/** null = open-ended upwards (`DC+5+`, `19+`). */
 	max: Term | null;
+	/** Matches the die as rolled, before modifiers, ahead of every other row: `nat 20`. */
+	natural?: number;
 }
 
 export interface DcOverrides {
@@ -43,7 +50,10 @@ export interface DcOverrides {
 export interface TableRow {
 	/** null on plain-list tables. */
 	range: RangeSpec | null;
-	value: string;
+	/** `(Near Miss)` from the range cell, if it had one. */
+	label: string | null;
+	/** The value cells (every cell on a plain list, every cell after the range otherwise). */
+	cells: string[];
 }
 
 export interface RandomTable {
@@ -57,6 +67,8 @@ export interface RandomTable {
 	/** Dice from the header cell, or null to work it out. */
 	formula: string | null;
 	rows: TableRow[];
+	/** Slugs of the value columns' headers, for picking one: `degrees.attack`. */
+	columns: string[];
 	/** Plain list — every row equally likely. */
 	uniform: boolean;
 	/** Some range counts from the DC — a resolution table. */
@@ -67,7 +79,12 @@ export interface RandomTable {
 const TERM = String.raw`(?:dc\s*[+-]\s*\d+|dc|\d+)`;
 const SINGLE_RE = new RegExp(`^(${TERM})$`, 'i');
 const RANGE_RE = new RegExp(String.raw`^(${TERM})\s*(?:[-–—]|to|\.\.)\s*(${TERM})$`, 'i');
-const OPEN_RE = new RegExp(String.raw`^(${TERM})\s*\+$`, 'i');
+const OPEN_UP_RE = new RegExp(String.raw`^(?:(${TERM})\s*\+|(?:≥|>=)\s*(${TERM})|(${TERM})\s+or\s+(?:more|higher|above))$`, 'i');
+const OPEN_DOWN_RE = new RegExp(String.raw`^(?:(?:≤|<=)\s*(${TERM})|(${TERM})\s+or\s+(?:less|lower|below))$`, 'i');
+const NATURAL_RE = /^nat(?:ural)?\s*(\d+)$/i;
+const BY = String.raw`\s+(?:the\s+)?(?:target|dc)?\s*by\s+(\d+)\s*(?:(?:[-–—]|to)\s*(\d+)|(\+|or\s+more))?$`;
+const BEAT_RE = new RegExp(String.raw`^beat(?:s|en)?${BY}`, 'i');
+const MISS_RE = new RegExp(String.raw`^miss(?:es|ed)?${BY}`, 'i');
 const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
 const OVERRIDE_RE = /^\s*(dc|shift|base|step)\s*:\s*(-?\d+)\s*$/i;
 
@@ -82,19 +99,57 @@ function parseTerm(text: string): Term {
 	return { dc: false, n: parseInt(t, 10) };
 }
 
-/** `5`, `1-3`, `1–3`, `2 to 4`, `19+`, `DC`, `2-DC-6`, `DC-5–DC-1`, `DC+5+` */
+const dcTerm = (n: number): Term => ({ dc: true, n });
+
+/** `Beat target by 0–9`, `Beat target by 10+`, `Miss by 1–2`, `Miss by 10+` */
+function parsePhrase(text: string): RangeSpec | null {
+	let m = BEAT_RE.exec(text);
+	if (m) {
+		const a = parseInt(m[1], 10);
+		if (m[2]) return { min: dcTerm(a), max: dcTerm(parseInt(m[2], 10)) };
+		return { min: dcTerm(a), max: m[3] ? null : dcTerm(a) };
+	}
+	m = MISS_RE.exec(text);
+	if (m) {
+		const a = parseInt(m[1], 10);
+		if (m[2]) return { min: dcTerm(-parseInt(m[2], 10)), max: dcTerm(-a) };
+		return { min: m[3] ? null : dcTerm(-a), max: dcTerm(-a) };
+	}
+	return null;
+}
+
+/** `5`, `1-3`, `1–3`, `2 to 4`, `19+`, `≤5`, `DC`, `2-DC-6`, `DC-5–DC-1`, `DC+5+`, `nat 20`, `Miss by 1–2` */
 export function parseRange(cell: string): RangeSpec | null {
 	const text = stripEmphasis(cell).trim();
-	let m = SINGLE_RE.exec(text);
+	let m = NATURAL_RE.exec(text);
+	if (m) {
+		const n = parseInt(m[1], 10);
+		return { min: { dc: false, n }, max: { dc: false, n }, natural: n };
+	}
+	m = SINGLE_RE.exec(text);
 	if (m) {
 		const t = parseTerm(m[1]);
 		return { min: t, max: t };
 	}
 	m = RANGE_RE.exec(text);
 	if (m) return { min: parseTerm(m[1]), max: parseTerm(m[2]) };
-	m = OPEN_RE.exec(text);
-	if (m) return { min: parseTerm(m[1]), max: null };
-	return null;
+	m = OPEN_UP_RE.exec(text);
+	if (m) return { min: parseTerm(m[1] ?? m[2] ?? m[3]), max: null };
+	m = OPEN_DOWN_RE.exec(text);
+	if (m) return { min: null, max: parseTerm(m[1] ?? m[2]) };
+	return parsePhrase(text);
+}
+
+/** A first-column cell: its range, plus a trailing `(Label)` if it has one. */
+export function parseRangeCell(cell: string): { range: RangeSpec; label: string | null } | null {
+	const text = stripEmphasis(cell).trim();
+	const paren = /^(.+?)\s*\(([^()]+)\)$/.exec(text);
+	if (paren) {
+		const range = parseRange(paren[1]);
+		if (range) return { range, label: paren[2].trim() };
+	}
+	const range = parseRange(text);
+	return range ? { range, label: null } : null;
 }
 
 export function termValue(term: Term, dc: number | undefined): number | null {
@@ -103,7 +158,23 @@ export function termValue(term: Term, dc: number | undefined): number | null {
 }
 
 export function rangeUsesDc(range: RangeSpec): boolean {
-	return range.min.dc || !!range.max?.dc;
+	return !!range.min?.dc || !!range.max?.dc;
+}
+
+const isBlank = (cell: string | undefined) => !cell || /^[\s—–-]*$/.test(cell);
+
+/**
+ * What a row rolls to. With a column (`degrees.attack`): the label, then that column. Without one:
+ * the label if the row has one, otherwise every value cell joined with an em dash.
+ */
+export function rowText(row: TableRow, column?: number): string {
+	if (column !== undefined) {
+		const cell = row.cells[column];
+		if (isBlank(cell)) return row.label ?? '';
+		return row.label ? `${row.label} — ${cell}` : cell;
+	}
+	if (row.label) return row.label;
+	return row.cells.filter((c) => !isBlank(c)).join(' — ');
 }
 
 function stripEmphasis(text: string): string {
@@ -200,45 +271,35 @@ function buildTable(
 
 	const headCell = stripEmphasis(header[0] ?? '').trim();
 	const formula = isDiceFormula(headCell) ? headCell : null;
-	const ranges = rows.map((cells) => (cells.length > 1 ? parseRange(cells[0]) : null));
+	const ranges = rows.map((cells) => (cells.length > 1 ? parseRangeCell(cells[0]) : null));
 	const ranged = ranges.filter((r) => r !== null).length;
+	const base = { name, heading: headingText.trim(), path, line, overrides };
 
 	// Ranged when the dice header says so or most of the first column is numbers.
 	if (formula || ranged * 2 > rows.length) {
 		const tableRows: TableRow[] = [];
 		rows.forEach((cells, idx) => {
-			const range = ranges[idx];
-			if (!range) return;
-			tableRows.push({ range, value: joinValue(cells.slice(1)) });
+			const parsed = ranges[idx];
+			if (!parsed) return;
+			tableRows.push({ range: parsed.range, label: parsed.label, cells: cells.slice(1) });
 		});
 		if (tableRows.length === 0) return null;
 		return {
-			name,
-			heading: headingText.trim(),
-			path,
-			line,
+			...base,
 			formula,
 			rows: tableRows,
+			columns: header.slice(1).map(slugify),
 			uniform: false,
 			usesDc: tableRows.some((r) => r.range !== null && rangeUsesDc(r.range)),
-			overrides,
 		};
 	}
 
 	return {
-		name,
-		heading: headingText.trim(),
-		path,
-		line,
+		...base,
 		formula: null,
-		rows: rows.map((cells) => ({ range: null, value: joinValue(cells) })),
+		rows: rows.map((cells) => ({ range: null, label: null, cells })),
+		columns: header.map(slugify),
 		uniform: true,
 		usesDc: false,
-		overrides,
 	};
-}
-
-/** Extra columns are kept, joined with an em dash: `| 3 | Torch | 1 cp |` → `Torch — 1 cp`. */
-function joinValue(cells: string[]): string {
-	return cells.filter((c) => c !== '').join(' — ');
 }
